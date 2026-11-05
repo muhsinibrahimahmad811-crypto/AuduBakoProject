@@ -31,7 +31,7 @@ export default defineComponent({
     const adminDept = ref('Receptionist');
     const role = ref('dept_admin');
     const newDeptName = ref('');
-    const latestGeneratedCode = ref(null);
+    const latestGeneratedCode = ref();
 
     // Clean Logout Handler
     const handleLogout = () => {
@@ -57,8 +57,11 @@ export default defineComponent({
       }
     };
 
-    const handleGenerateCode = () => {
-      latestGeneratedCode.value = generateVerificationCode();
+    const handleGenerateCode = async () => {
+      const code = await generateVerificationCode();
+      if (code) {
+        latestGeneratedCode.value = code;
+      }
     };
 
     const handleAddDept = (e) => {

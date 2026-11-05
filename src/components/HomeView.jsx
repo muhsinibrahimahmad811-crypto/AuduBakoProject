@@ -1,15 +1,34 @@
-import { defineComponent } from 'vue';
+import { defineComponent, ref, onMounted } from 'vue';
+import { supabase } from '../supabase';
 import { useAttendance } from '../composables/useAttendance';
 
 export default defineComponent({
   name: 'HomeView',
+  props: {
+    activeView: { type: String, required: true }
+  },
   emits: ['navigate'],
-  setup(_, { emit }) {
+  setup(props, { emit }) {
     const { stats } = useAttendance();
+    const isConnected = ref(null);
+
+    const checkSupabaseConnection = async () => {
+      try {
+        const { error } = await supabase.from('departments').select('count').limit(1);
+        isConnected.value = !error;
+      } catch (e) {
+        isConnected.value = false;
+      }
+    };
+
+    onMounted(() => {
+      checkSupabaseConnection();
+    });
 
     return () => (
       <div>
-        {/* Hero Section */}
+        
+
         <div class="bg-success text-white rounded-3 p-5 mb-5 shadow-sm">
           <div class="row align-items-center">
             <div class="col-lg-8">
@@ -30,7 +49,6 @@ export default defineComponent({
           </div>
         </div>
 
-        {/* Quick Metrics Cards */}
         <div class="row g-4 mb-5">
           <div class="col-md-3">
             <div class="card border-0 shadow-sm text-center p-3">
@@ -58,7 +76,6 @@ export default defineComponent({
           </div>
         </div>
 
-        {/* Portal Entry Options */}
         <div class="row g-4">
           <div class="col-md-4">
             <div class="card h-100 border-0 shadow-sm p-4">
