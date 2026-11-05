@@ -378,7 +378,7 @@ export function useAttendance() {
     return {
       total: scopedLogs.length,
       staffCount: scopedLogs.filter((l) => l.type === 'staff').length,
-      guestCount: scopedLogs.filter((l => l.type === 'guest').length),
+      guestCount: scopedLogs.filter((l) => l.type === 'guest').length,
       activeOnsite: scopedLogs.filter((l) => l.status === 'Checked In').length
     };
   });

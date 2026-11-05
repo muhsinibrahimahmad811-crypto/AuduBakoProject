@@ -1,16 +1,29 @@
-import { defineComponent, ref } from 'vue';
+import { defineComponent, onMounted, ref } from 'vue';
 import HomeView from './components/HomeView';
 import StaffPortal from './components/StaffPortal';
 import GuestForm from './components/GuestForm';
 import AdminPortal from './components/AdminPortal';
+import { supabase } from './supabase';
 
 export default defineComponent({
   name: 'App',
   setup() {
     const view = ref('home'); // 'home', 'staff', 'guest', or 'admin'
+    const dbStatus = ref('Connecting to Supabase...');
+
+    onMounted(async () => {
+      const { data, error } = await supabase.from('departments').select('count');
+      if (error) {
+        dbStatus.value = `❌ Connection Error: ${error.message}`;
+      } else {
+        dbStatus.value = '✅ Connected to Supabase Database!';
+      }
+    });
 
     return () => (
       <div class="min-vh-100 bg-light font-sans text-dark">
+        <div class="alert alert-info text-center m-3 mb-0">{dbStatus.value}</div>
+
         <header class="bg-success text-white py-3 shadow-sm mb-4">
           <div class="container d-flex justify-content-between align-items-center">
             <div class="cursor-pointer" onClick={() => (view.value = 'home')}>
