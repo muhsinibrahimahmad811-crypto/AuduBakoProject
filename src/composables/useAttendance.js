@@ -1,46 +1,27 @@
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
+import { supabase } from '../supabase';
 
-const LOGS_KEY = 'audu_bako_attendance_logs';
-const USERS_KEY = 'audu_bako_registered_users';
 const CURRENT_USER_KEY = 'audu_bako_current_user';
-const DEPARTMENTS_KEY = 'audu_bako_departments';
-const ACTIVE_CODES_KEY = 'audu_bako_active_codes';
 
-const defaultDepartments = [
-  'Receptionist',
-  'Ministry of Finance',
-  'Ministry of Works',
-  'Civil Service Commission',
-  'Ministry of Health',
-  'Ministry of Education'
-];
+// Shared Reactive State
+const logs = ref([]);
+const users = ref([]);
+const departments = ref([]);
+const activeCodes = ref([]);
+const loading = ref(false);
 
-const defaultLogs = [
-  { id: '1', type: 'staff', name: 'Kabiru Adamu', identifier: 'ABS-4821', department: 'Ministry of Finance', timeIn: '08:15 AM', timeOut: null, status: 'Checked In', date: new Date().toISOString().split('T')[0] },
-  { id: '2', type: 'guest', name: 'Amina Bello', identifier: '08031234567', host: 'Dir. Human Resources', department: 'Civil Service Commission', purpose: 'Official Consultation', timeIn: '09:30 AM', timeOut: null, status: 'Checked In', date: new Date().toISOString().split('T')[0] }
-];
-
-// Helper for safe JSON parsing
-const getStored = (key, fallback) => {
+// Hydrate current user safely from localStorage session
+const getStoredUser = () => {
   try {
-    const item = localStorage.getItem(key);
-    return item ? JSON.parse(item) : fallback;
+    const item = localStorage.getItem(CURRENT_USER_KEY);
+    return item ? JSON.parse(item) : null;
   } catch (e) {
-    console.error(`Error loading key ${key} from storage:`, e);
-    return fallback;
+    console.error('Failed to restore current user:', e);
+    return null;
   }
 };
 
-const logs = ref(getStored(LOGS_KEY, defaultLogs));
-const users = ref(getStored(USERS_KEY, []));
-const currentUser = ref(getStored(CURRENT_USER_KEY, null));
-const departments = ref(getStored(DEPARTMENTS_KEY, defaultDepartments));
-const activeCodes = ref(getStored(ACTIVE_CODES_KEY, []));
-
-const saveLogs = () => localStorage.setItem(LOGS_KEY, JSON.stringify(logs.value));
-const saveUsers = () => localStorage.setItem(USERS_KEY, JSON.stringify(users.value));
-const saveDepartments = () => localStorage.setItem(DEPARTMENTS_KEY, JSON.stringify(departments.value));
-const saveCodes = () => localStorage.setItem(ACTIVE_CODES_KEY, JSON.stringify(activeCodes.value));
+const currentUser = ref(getStoredUser());
 
 export function useAttendance() {
   const searchQuery = ref('');
@@ -48,42 +29,229 @@ export function useAttendance() {
   const selectedDepartmentFilter = ref('all');
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // Safe Role Computation (Prevents freeze on refresh)
-  const isSuperAdmin = computed(() => currentUser.value?.role === 'super_admin');
-  const isReceptionist = computed(() => currentUser.value?.department === 'Receptionist');
-
-  const activeDepartmentScope = computed(() => {
-    if (!currentUser.value || !currentUser.value.isAdmin) return null;
-    if (isSuperAdmin.value || isReceptionist.value) return selectedDepartmentFilter.value;
-    return currentUser.value.department || 'all';
-  });
-
-  const generateVerificationCode = () => {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const newCodeObj = {
-      code,
-      generatedBy: currentUser.value?.name || 'Reception Desk',
-      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      used: false
-    };
-    activeCodes.value.unshift(newCodeObj);
-    saveCodes();
-    return code;
+  // Helper: Persist current user session locally
+  const setCurrentUser = (user) => {
+    currentUser.value = user;
+    if (user) {
+      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(CURRENT_USER_KEY);
+    }
   };
 
-  const validateCode = (inputCode) => {
-    if (!inputCode) return false;
-    const target = activeCodes.value.find(c => c.code === inputCode.trim() && !c.used);
-    if (!target) return false;
-    target.used = true;
-    saveCodes();
+  // --- 1. DATA FETCHING (Supabase) ---
+  const fetchLogs = async () => {
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('*')
+      .order('id', { ascending: false });
+    if (!error && data) logs.value = data;
+  };
+
+  const fetchUsers = async () => {
+    const { data, error } = await supabase.from('users').select('*');
+    if (!error && data) users.value = data;
+  };
+
+  const fetchDepartments = async () => {
+    const { data, error } = await supabase.from('departments').select('*');
+    if (!error && data) {
+      departments.value = data.map((d) => d.name);
+    }
+  };
+
+  const fetchActiveCodes = async () => {
+    const { data, error } = await supabase
+      .from('active_codes')
+      .select('*')
+      .order('id', { ascending: false });
+    if (!error && data) activeCodes.value = data;
+  };
+
+  const fetchAllData = async () => {
+    loading.value = true;
+    await Promise.all([
+      fetchLogs(),
+      fetchUsers(),
+      fetchDepartments(),
+      fetchActiveCodes()
+    ]);
+    loading.value = false;
+  };
+
+  // Auto-fetch data on component mount
+  onMounted(() => {
+    fetchAllData();
+  });
+
+  // --- 2. AUTHENTICATION & USER MANAGEMENT ---
+  const registerUser = async (userData) => {
+    // Check if username already exists
+    const { data: existing } = await supabase
+      .from('users')
+      .select('id')
+      .eq('username', userData.username)
+      .single();
+
+    if (existing) {
+      alert('An account with this Staff ID / Username already exists.');
+      return false;
+    }
+
+    const newUser = {
+      id: Date.now().toString(),
+      name: userData.name,
+      username: userData.username,
+      password: userData.password,
+      department: userData.department,
+      role: userData.role || 'staff',
+      is_admin: userData.isAdmin || false,
+      active: true
+    };
+
+    const { error } = await supabase.from('users').insert([newUser]);
+
+    if (error) {
+      alert(`Registration failed: ${error.message}`);
+      return false;
+    }
+
+    // Map DB snake_case back to frontend camelCase for session state
+    const sessionUser = {
+      ...newUser,
+      isAdmin: newUser.is_admin
+    };
+
+    users.value.push(sessionUser);
+    setCurrentUser(sessionUser);
     return true;
   };
 
-  const addStaffCheckInWithCode = (verificationCode) => {
+  const loginUser = async (username, password, requiredRole = 'staff') => {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .eq('password', password)
+      .single();
+
+    if (error || !user) {
+      alert('Invalid Staff ID/Username or Password.');
+      return false;
+    }
+
+    if (user.active === false) {
+      alert('Account Deactivated: Please contact your Secretariat Administrator.');
+      return false;
+    }
+
+    if (requiredRole === 'admin' && !user.is_admin) {
+      alert('Access Denied: Admin privileges required.');
+      return false;
+    }
+
+    const sessionUser = {
+      ...user,
+      isAdmin: user.is_admin
+    };
+
+    setCurrentUser(sessionUser);
+    return true;
+  };
+
+  const logoutUser = () => {
+    setCurrentUser(null);
+  };
+
+  const updateUser = async (userId, updatedFields) => {
+    const dbPayload = {
+      name: updatedFields.name,
+      username: updatedFields.username,
+      department: updatedFields.department,
+      role: updatedFields.role,
+      is_admin: updatedFields.isAdmin
+    };
+
+    const { error } = await supabase.from('users').update(dbPayload).eq('id', userId);
+
+    if (error) {
+      alert(`Update failed: ${error.message}`);
+      return;
+    }
+
+    await fetchUsers();
+    alert('User account updated successfully!');
+  };
+
+  const toggleUserStatus = async (userId) => {
+    const target = users.value.find((u) => u.id === userId);
+    if (!target) return;
+
+    if (target.role === 'super_admin') {
+      alert('Super Admin accounts cannot be deactivated.');
+      return;
+    }
+
+    const newStatus = target.active === false;
+    const { error } = await supabase
+      .from('users')
+      .update({ active: newStatus })
+      .eq('id', userId);
+
+    if (!error) {
+      target.active = newStatus;
+    }
+  };
+
+  // --- 3. RECEPTIONIST CODE DISPATCHER ---
+  const generateVerificationCode = async () => {
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const newCodeObj = {
+      code,
+      generated_by: currentUser.value?.name || 'Reception Desk',
+      created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      used: false
+    };
+
+    const { data, error } = await supabase
+      .from('active_codes')
+      .insert([newCodeObj])
+      .select()
+      .single();
+
+    if (!error && data) {
+      activeCodes.value.unshift(data);
+      return code;
+    }
+    return null;
+  };
+
+  const validateCode = async (inputCode) => {
+    if (!inputCode) return false;
+
+    // Check Supabase for an unused matching code
+    const { data, error } = await supabase
+      .from('active_codes')
+      .select('*')
+      .eq('code', inputCode.trim())
+      .eq('used', false)
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) return false;
+
+    // Mark code as used
+    await supabase.from('active_codes').update({ used: true }).eq('id', data.id);
+    await fetchActiveCodes();
+    return true;
+  };
+
+  // --- 4. ATTENDANCE ACTIONS ---
+  const addStaffCheckInWithCode = async (verificationCode) => {
     if (!currentUser.value) return false;
 
-    if (!validateCode(verificationCode)) {
+    const isValid = await validateCode(verificationCode);
+    if (!isValid) {
       alert('Invalid or already used 6-digit verification code. Please request a new code from the Receptionist.');
       return false;
     }
@@ -94,133 +262,124 @@ export function useAttendance() {
       name: currentUser.value.name || 'Staff Member',
       identifier: currentUser.value.username || 'ABS-0000',
       department: currentUser.value.department || 'General',
-      timeIn: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      timeOut: null,
+      time_in: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      time_out: null,
       status: 'Checked In',
       date: todayStr
     };
-    logs.value.unshift(newEntry);
-    saveLogs();
+
+    const { error } = await supabase.from('attendance_logs').insert([newEntry]);
+
+    if (error) {
+      alert(`Check-in failed: ${error.message}`);
+      return false;
+    }
+
+    await fetchLogs();
     alert('Verification successful! You are now checked in.');
     return true;
   };
 
-  const logoutUser = () => {
-    currentUser.value = null;
-    localStorage.removeItem(CURRENT_USER_KEY);
-  };
+  const checkOutStaffRecord = async (identifierParam = null) => {
+    const targetIdentifier = identifierParam || currentUser.value?.username;
+    if (!targetIdentifier) return;
 
-  const registerUser = (userData) => {
-    const existing = users.value.find(u => u.username === userData.username);
-    if (existing) {
-      alert('Account with this Staff ID / Username already exists.');
-      return false;
-    }
-    const newUser = { id: Date.now().toString(), ...userData };
-    users.value.push(newUser);
-    saveUsers();
-    currentUser.value = newUser;
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(newUser));
-    return true;
-  };
+    const activeRecord = logs.value.find(
+      (l) => l.identifier === targetIdentifier && l.status === 'Checked In' && l.date === todayStr
+    );
 
-  const updateUser = (userId, updatedFields) => {
-    const userIndex = users.value.findIndex(u => u.id === userId);
-    if (userIndex !== -1) {
-      users.value[userIndex] = {
-        ...users.value[userIndex],
-        ...updatedFields
-      };
-      saveUsers();
-      alert('User account updated successfully!');
+    if (!activeRecord) return;
+
+    const timeOutStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const { error } = await supabase
+      .from('attendance_logs')
+      .update({ time_out: timeOutStr, status: 'Checked Out' })
+      .eq('id', activeRecord.id);
+
+    if (!error) {
+      await fetchLogs();
     }
   };
 
-  const toggleUserStatus = (userId) => {
-    const target = users.value.find(u => u.id === userId);
-    if (target) {
-      if (target.role === 'super_admin') {
-        alert('Super Admin accounts cannot be deactivated.');
-        return;
-      }
-      target.active = target.active === false ? true : false;
-      saveUsers();
-    }
+  const addDepartment = async (deptName) => {
+    if (!deptName.trim()) return;
+    const { error } = await supabase.from('departments').insert([{ name: deptName.trim() }]);
+    if (!error) await fetchDepartments();
   };
 
-  const loginUser = (username, password, requiredRole = 'staff') => {
-    const user = users.value.find(u => u.username === username && u.password === password);
-    if (!user) {
-      alert('Invalid Staff ID/Username or Password.');
-      return false;
-    }
-
-    if (user.active === false) {
-      alert('Account Deactivated: Please contact your Secretariat Administrator.');
-      return false;
-    }
-
-    if (requiredRole === 'admin' && !user.isAdmin) {
-      alert('Access Denied: Admin privileges required.');
-      return false;
-    }
-    currentUser.value = user;
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
-    return true;
+  const removeDepartment = async (deptName) => {
+    const { error } = await supabase.from('departments').delete().eq('name', deptName);
+    if (!error) await fetchDepartments();
   };
+
+  // --- 5. SAFE COMPUTED PROPERTIES ---
+  const isSuperAdmin = computed(() => currentUser.value?.role === 'super_admin');
+  const isReceptionist = computed(() => currentUser.value?.department === 'Receptionist');
+
+  const activeDepartmentScope = computed(() => {
+    if (!currentUser.value || !currentUser.value.isAdmin) return null;
+    if (isSuperAdmin.value || isReceptionist.value) return selectedDepartmentFilter.value;
+    return currentUser.value.department || 'all';
+  });
 
   const hasCheckedInToday = computed(() => {
     if (!currentUser.value || currentUser.value.isAdmin) return false;
-    return logs.value.some(l => l.identifier === currentUser.value.username && l.date === todayStr);
+    return logs.value.some(
+      (l) => l.identifier === currentUser.value.username && l.date === todayStr
+    );
   });
 
   const activeStaffSession = computed(() => {
     if (!currentUser.value || currentUser.value.isAdmin) return null;
-    return logs.value.find(l => l.identifier === currentUser.value.username && l.status === 'Checked In' && l.date === todayStr);
+    return logs.value.find(
+      (l) => l.identifier === currentUser.value.username && l.status === 'Checked In' && l.date === todayStr
+    );
   });
 
   const isTodaySessionCompleted = computed(() => {
     if (!currentUser.value || currentUser.value.isAdmin) return false;
-    return logs.value.some(l => l.identifier === currentUser.value.username && l.status === 'Checked Out' && l.date === todayStr);
+    return logs.value.some(
+      (l) => l.identifier === currentUser.value.username && l.status === 'Checked Out' && l.date === todayStr
+    );
   });
-
-  const checkOutStaffRecord = () => {
-    if (!activeStaffSession.value) return;
-    activeStaffSession.value.timeOut = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    activeStaffSession.value.status = 'Checked Out';
-    saveLogs();
-  };
 
   const staffHistory = computed(() => {
     if (!currentUser.value || currentUser.value.isAdmin) return [];
-    return logs.value.filter(l => l.identifier === currentUser.value.username);
+    return logs.value.filter((l) => l.identifier === currentUser.value.username);
   });
 
   const filteredLogs = computed(() => {
     const query = (searchQuery.value || '').toLowerCase();
-    return logs.value.filter(item => {
+    return logs.value.map(item => ({
+      ...item,
+      timeIn: item.time_in,
+      timeOut: item.time_out
+    })).filter((item) => {
       const matchesType = filterType.value === 'all' || item.type === filterType.value;
-      const matchesSearch = (item.name || '').toLowerCase().includes(query) ||
-                            (item.identifier || '').toLowerCase().includes(query);
-      const matchesDept = !activeDepartmentScope.value || 
-                          activeDepartmentScope.value === 'all' || 
-                          item.department === activeDepartmentScope.value;
+      const matchesSearch =
+        (item.name || '').toLowerCase().includes(query) ||
+        (item.identifier || '').toLowerCase().includes(query);
+      const matchesDept =
+        !activeDepartmentScope.value ||
+        activeDepartmentScope.value === 'all' ||
+        item.department === activeDepartmentScope.value;
 
       return matchesType && matchesSearch && matchesDept;
     });
   });
 
   const stats = computed(() => {
-    const scopedLogs = logs.value.filter(item => {
+    const scopedLogs = logs.value.filter((item) => {
       if (!activeDepartmentScope.value || activeDepartmentScope.value === 'all') return true;
       return item.department === activeDepartmentScope.value;
     });
 
     return {
       total: scopedLogs.length,
-      staffCount: scopedLogs.filter(l => l.type === 'staff').length,
-      guestCount: scopedLogs.filter(l => l.type === 'guest').length,
-      activeOnsite: scopedLogs.filter(l => l.status === 'Checked In').length
+      staffCount: scopedLogs.filter((l) => l.type === 'staff').length,
+      guestCount: scopedLogs.filter((l => l.type === 'guest').length),
+      activeOnsite: scopedLogs.filter((l) => l.status === 'Checked In').length
     };
   });
 
@@ -230,6 +389,7 @@ export function useAttendance() {
     currentUser,
     departments,
     activeCodes,
+    loading,
     searchQuery,
     filterType,
     selectedDepartmentFilter,
@@ -242,13 +402,16 @@ export function useAttendance() {
     isSuperAdmin,
     isReceptionist,
     activeDepartmentScope,
+    fetchAllData,
     registerUser,
     loginUser,
     logoutUser,
+    updateUser,
+    toggleUserStatus,
+    addDepartment,
+    removeDepartment,
     generateVerificationCode,
     addStaffCheckInWithCode,
-    checkOutStaffRecord,
-    updateUser,
-    toggleUserStatus
+    checkOutStaffRecord
   };
 }
