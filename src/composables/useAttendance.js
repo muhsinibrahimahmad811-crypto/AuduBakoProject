@@ -159,6 +159,24 @@ export function useAttendance() {
     return true;
   };
 
+  const completeBiometricLogin = (user, requiredRole = 'admin') => {
+    if (!user || user.active === false) {
+      alert('Account Deactivated: Please contact your Secretariat Administrator.');
+      return false;
+    }
+
+    if (requiredRole === 'admin' && !user.is_admin) {
+      alert('Access Denied: Admin privileges required.');
+      return false;
+    }
+
+    setCurrentUser({
+      ...user,
+      isAdmin: user.is_admin
+    });
+    return true;
+  };
+
   const logoutUser = () => {
     setCurrentUser(null);
   };
@@ -405,6 +423,7 @@ export function useAttendance() {
     fetchAllData,
     registerUser,
     loginUser,
+    completeBiometricLogin,
     logoutUser,
     updateUser,
     toggleUserStatus,

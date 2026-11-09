@@ -1,5 +1,6 @@
 import { defineComponent, ref } from 'vue';
 import { useAttendance } from '../composables/useAttendance';
+import { registerBiometric, authenticateBiometric } from '../utils/webauthn';
 import StatsOverview from './StatsOverview';
 import AttendanceTable from './AttendanceTable';
 import ExportButton from './ExportButton';
@@ -11,6 +12,7 @@ export default defineComponent({
     const { 
       currentUser, 
       loginUser, 
+      completeBiometricLogin,
       registerUser, 
       logoutUser, 
       departments, 
@@ -32,6 +34,7 @@ export default defineComponent({
     const role = ref('dept_admin');
     const newDeptName = ref('');
     const latestGeneratedCode = ref();
+    const isProcessing = ref(false);
 
     // Clean Logout Handler
     const handleLogout = () => {
@@ -54,6 +57,44 @@ export default defineComponent({
         });
       } else {
         loginUser(username.value, password.value, 'admin');
+      }
+    };
+
+    const handleSetupFaceID = async () => {
+      const setupPassword = window.prompt('Re-enter your admin password to set up Face ID:');
+      if (setupPassword === null) return;
+      if (!setupPassword) {
+        alert('Enter your password to set up Face ID.');
+        return;
+      }
+
+      try {
+        isProcessing.value = true;
+        await registerBiometric(currentUser.value.username, setupPassword);
+        alert('Face ID / Biometric registered successfully!');
+      } catch (err) {
+        alert(`Failed to register Face ID: ${err.message}`);
+      } finally {
+        isProcessing.value = false;
+      }
+    };
+
+    const handleFaceIDLogin = async () => {
+      if (!username.value) {
+        alert('Enter your username before using Face ID.');
+        return;
+      }
+
+      try {
+        isProcessing.value = true;
+        const user = await authenticateBiometric(username.value);
+        if (completeBiometricLogin(user)) {
+          alert(`Welcome back, ${user.name}!`);
+        }
+      } catch (err) {
+        alert(`Face ID verification failed: ${err.message}`);
+      } finally {
+        isProcessing.value = false;
       }
     };
 
@@ -116,6 +157,16 @@ export default defineComponent({
                 <button type="submit" class="btn btn-dark w-100 mt-2">
                   {isSignup.value ? 'Create Admin Account' : 'Authenticate Admin'}
                 </button>
+                {!isSignup.value && (
+                  <button
+                    type="button"
+                    class="btn btn-outline-success w-100 d-flex align-items-center justify-content-center gap-2"
+                    onClick={handleFaceIDLogin}
+                    disabled={isProcessing.value}
+                  >
+                    {isProcessing.value ? 'Verifying Face ID...' : 'Login with Face ID'}
+                  </button>
+                )}
               </form>
               <div class="text-center mt-3">
                 <button class="btn btn-link btn-sm text-decoration-none text-muted" onClick={() => (isSignup.value = !isSignup.value)}>
@@ -140,9 +191,18 @@ export default defineComponent({
                   </p>
                 </div>
                 {/* Fixed Sign Out Button */}
-                <button onClick={handleLogout} class="btn btn-outline-danger btn-sm align-self-start align-self-md-center">
-                  Sign Out Admin
-                </button>
+                <div class="d-flex flex-wrap gap-2 align-self-start align-self-md-center">
+                  <button
+                    onClick={handleSetupFaceID}
+                    class="btn btn-outline-success btn-sm"
+                    disabled={isProcessing.value}
+                  >
+                    {isProcessing.value ? 'Processing...' : 'Set Up Face ID'}
+                  </button>
+                  <button onClick={handleLogout} class="btn btn-outline-danger btn-sm">
+                    Sign Out Admin
+                  </button>
+                </div>
               </div>
             </div>
 
