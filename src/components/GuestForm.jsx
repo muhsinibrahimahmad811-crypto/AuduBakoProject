@@ -1,33 +1,51 @@
 import { defineComponent, ref } from 'vue';
 import { useAttendance } from '../composables/useAttendance';
+import { supabase } from '../supabase';
 
 export default defineComponent({
   name: 'GuestForm',
   setup() {
-    const { addRecord, departments } = useAttendance();
+    const { fetchAllData, departments } = useAttendance();
 
     const guestName = ref('');
-    const guestPhone = ref('');
     const guestHost = ref('');
     const department = ref('Ministry of Finance');
     const guestPurpose = ref('');
 
-    const handleGuestSubmit = (e) => {
+    const handleGuestSubmit = async (e) => {
       e.preventDefault();
-      if (!guestName.value || !guestPhone.value) return;
-      addRecord({
+
+      if (!guestName.value || !guestHost.value) {
+        alert('Please complete all required guest fields.');
+        return;
+      }
+
+      const newGuestRecord = {
+        id: Date.now().toString(),
         type: 'guest',
         name: guestName.value,
-        identifier: guestPhone.value,
+        identifier: `GUEST-${Math.floor(100 + Math.random() * 900)}`,
         host: guestHost.value,
         department: department.value,
-        purpose: guestPurpose.value
-      });
+        purpose: guestPurpose.value,
+        time_in: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time_out: null,
+        status: 'Checked In',
+        date: new Date().toISOString().split('T')[0]
+      };
+
+      const { error } = await supabase.from('attendance_logs').insert([newGuestRecord]);
+
+      if (error) {
+        alert(`Guest Check-in Failed: ${error.message}`);
+        return;
+      }
+
+      alert('Guest checked in successfully!');
       guestName.value = '';
-      guestPhone.value = '';
       guestHost.value = '';
       guestPurpose.value = '';
-      alert('Guest pass issued successfully!');
+      await fetchAllData();
     };
 
     return () => (
@@ -40,10 +58,6 @@ export default defineComponent({
             <div>
               <label class="form-label fw-semibold">Visitor Full Name</label>
               <input v-model={guestName.value} required type="text" class="form-control" placeholder="e.g. Fatima Ali" />
-            </div>
-            <div>
-              <label class="form-label fw-semibold">Phone Number</label>
-              <input v-model={guestPhone.value} required type="tel" class="form-control" placeholder="e.g. 08012345678" />
             </div>
             <div>
               <label class="form-label fw-semibold">Host Officer / Dept</label>
