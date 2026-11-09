@@ -6,7 +6,7 @@ Staff email recovery uses Supabase Auth. Apply `supabase/migrations/202611092020
 
 ## Face ID / WebAuthn setup
 
-The admin portal uses the `webauthn` Supabase Edge Function to verify registration and sign-in assertions. Before using Face ID:
+The staff and admin portals use the `webauthn` Supabase Edge Function to verify registration and sign-in assertions. Before using Face ID:
 
 1. Apply `supabase/migrations/20261109183000_create_webauthn_tables.sql` using `supabase db push` or the Supabase SQL editor.
 2. Set `WEBAUTHN_RP_ID` to the app hostname without a scheme or port (for example, `attendance.example.org`).
@@ -19,7 +19,7 @@ Configure the WebAuthn secrets, for example:
 supabase secrets set WEBAUTHN_RP_ID=attendance.example.org WEBAUTHN_ORIGINS=https://attendance.example.org
 ```
 
-Face ID setup asks the admin to re-enter their password. Credentials and short-lived single-use challenges are stored server-side. The existing app session is still stored in browser storage; this change verifies the WebAuthn assertion server-side but does not replace the app's broader session model.
+Face ID setup asks the user to confirm their password. For accounts linked to Supabase Auth, setup also requires an active Supabase Auth session. Credentials and short-lived single-use challenges are stored server-side. The app session is still stored in browser storage; WebAuthn assertions are verified server-side but do not replace the app's broader session model.
 
 ---
 

@@ -55,20 +55,40 @@ const assertServerConfiguration = () => {
   }
 };
 
-const getActiveAdmin = async (username: string, password?: string) => {
-  let query = supabase
+const getActiveUser = async (username: string) => {
+  const { data: user, error } = await supabase
     .from("users")
-    .select("id, username, name, department, role, is_admin, active")
-    .eq("username", username);
-
-  if (password !== undefined) query = query.eq("password", password);
-
-  const { data: user, error } = await query.maybeSingle();
+    .select(
+      "id, auth_user_id, username, name, department, role, is_admin, active, password",
+    )
+    .eq("username", username)
+    .maybeSingle();
   if (error) throw new Error(`Could not load user: ${error.message}`);
-  if (!user || user.active === false || !user.is_admin) {
-    throw new HttpError(401, "Admin account could not be authenticated.");
+  if (!user || user.active === false) {
+    throw new HttpError(401, "Account could not be authenticated.");
   }
   return user;
+};
+
+const authorizeRegistration = async (
+  user: Awaited<ReturnType<typeof getActiveUser>>,
+  password: string,
+  authorization?: string,
+) => {
+  if (user.auth_user_id) {
+    const token = authorization?.replace(/^Bearer\s+/i, "");
+    if (!token) {
+      throw new HttpError(401, "Sign in again before registering Face ID.");
+    }
+    const { data: authData, error: authError } = await supabase.auth.getUser(
+      token,
+    );
+    if (authError || authData.user?.id !== user.auth_user_id) {
+      throw new HttpError(401, "Sign in again before registering Face ID.");
+    }
+  } else if (password === undefined || user.password !== password) {
+    throw new HttpError(401, "Current password is incorrect.");
+  }
 };
 
 const saveChallenge = async (
@@ -125,7 +145,10 @@ const consumeChallenge = async (
   return data.challenge;
 };
 
-const handleRequest = async (body: Record<string, unknown>) => {
+const handleRequest = async (
+  body: Record<string, unknown>,
+  authorization?: string,
+) => {
   assertServerConfiguration();
 
   const action = readRequiredString(body.action, "action");
@@ -133,7 +156,8 @@ const handleRequest = async (body: Record<string, unknown>) => {
 
   if (action === "registration-options") {
     const password = readRequiredString(body.password, "password");
-    const user = await getActiveAdmin(username, password);
+    const user = await getActiveUser(username);
+    await authorizeRegistration(user, password, authorization);
     const { data: existingCredentials, error } = await supabase
       .from("webauthn_credentials")
       .select("credential_id, transports")
@@ -172,7 +196,8 @@ const handleRequest = async (body: Record<string, unknown>) => {
 
   if (action === "registration-verify") {
     const password = readRequiredString(body.password, "password");
-    await getActiveAdmin(username, password);
+    const user = await getActiveUser(username);
+    await authorizeRegistration(user, password, authorization);
     const challengeId = readRequiredString(body.challengeId, "challengeId");
     const credential = body.credential;
     if (!credential || typeof credential !== "object") {
@@ -214,7 +239,17 @@ const handleRequest = async (body: Record<string, unknown>) => {
   }
 
   if (action === "authentication-options") {
-    await getActiveAdmin(username);
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("id, active")
+      .eq("username", username)
+      .maybeSingle();
+    if (userError) {
+      throw new Error(`Could not load account: ${userError.message}`);
+    }
+    if (!user || user.active === false) {
+      throw new HttpError(401, "Account could not be authenticated.");
+    }
     const { data: credentials, error } = await supabase
       .from("webauthn_credentials")
       .select("credential_id, transports")
@@ -225,10 +260,7 @@ const handleRequest = async (body: Record<string, unknown>) => {
       );
     }
     if (!credentials?.length) {
-      throw new HttpError(
-        404,
-        "No Face ID is registered. Log in with your password to set it up.",
-      );
+      throw new HttpError(404, "No Face ID is registered for this account.");
     }
 
     const options = await generateAuthenticationOptions({
@@ -258,7 +290,7 @@ const handleRequest = async (body: Record<string, unknown>) => {
       throw new HttpError(400, "Missing authenticator response.");
     }
 
-    const user = await getActiveAdmin(username);
+    const user = await getActiveUser(username);
     const { data: storedCredential, error } = await supabase
       .from("webauthn_credentials")
       .select("credential_id, public_key, counter, transports")
@@ -323,6 +355,7 @@ const handleRequest = async (body: Record<string, unknown>) => {
         department: user.department,
         role: user.role,
         is_admin: user.is_admin,
+        auth_user_id: user.auth_user_id,
         active: user.active,
       },
     };
@@ -356,7 +389,12 @@ Deno.serve(async (request) => {
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       throw new HttpError(400, "Invalid request body.");
     }
-    return jsonResponse(await handleRequest(body));
+    return jsonResponse(
+      await handleRequest(
+        body,
+        request.headers.get("Authorization") ?? undefined,
+      ),
+    );
   } catch (error) {
     if (error instanceof HttpError) {
       return jsonResponse({ error: error.message }, error.status);

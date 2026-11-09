@@ -397,8 +397,13 @@ export function useAttendance() {
       return false;
     }
 
-    if (requiredRole === 'admin' && !user.is_admin) {
-      alert('Access Denied: Admin privileges required.');
+    if (
+      (requiredRole === 'admin' && !user.is_admin) ||
+      (requiredRole === 'staff' && user.is_admin)
+    ) {
+      alert(requiredRole === 'admin'
+        ? 'Access Denied: Admin privileges required.'
+        : 'Access Denied: Staff account required.');
       return false;
     }
 

@@ -1,6 +1,7 @@
 import { defineComponent, onMounted, onUnmounted, ref } from 'vue';
 import { useAttendance } from '../composables/useAttendance';
 import { supabase } from '../supabase';
+import { authenticateBiometric, registerBiometric } from '../utils/webauthn';
 
 export default defineComponent({
   name: 'StaffPortal',
@@ -8,6 +9,7 @@ export default defineComponent({
     const { 
       currentUser, 
       loginUser, 
+      completeBiometricLogin,
       registerStaff,
       enrollStaffRecoveryEmail,
       resendStaffRecoveryEmail,
@@ -40,6 +42,54 @@ export default defineComponent({
     const newPassword = ref('');
     const confirmNewPassword = ref('');
     const isProcessing = ref(false);
+
+    const handleFaceIDLogin = async () => {
+      if (!staffId.value) {
+        alert('Enter your Staff ID before using Face ID.');
+        return;
+      }
+
+      isProcessing.value = true;
+      try {
+        const user = await authenticateBiometric(staffId.value);
+        if (completeBiometricLogin(user, 'staff')) {
+          alert(`Welcome back, ${user.name}!`);
+        }
+      } catch (error) {
+        alert(`Face ID verification failed: ${error.message}`);
+      } finally {
+        isProcessing.value = false;
+      }
+    };
+
+    const handleSetupFaceID = async () => {
+      const setupPassword = window.prompt('Re-enter your password to set up Face ID:');
+      if (setupPassword === null) return;
+      if (!setupPassword) {
+        alert('Enter your password to set up Face ID.');
+        return;
+      }
+
+      isProcessing.value = true;
+      try {
+        if (currentUser.value.auth_user_id) {
+          const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+            email: currentUser.value.email,
+            password: setupPassword
+          });
+          if (authError || authData.user?.id !== currentUser.value.auth_user_id) {
+            throw new Error(authError?.message || 'Password does not match this staff account.');
+          }
+        }
+
+        await registerBiometric(currentUser.value.username, setupPassword);
+        alert('Face ID / Biometric registered successfully!');
+      } catch (error) {
+        alert(`Failed to register Face ID: ${error.message}`);
+      } finally {
+        isProcessing.value = false;
+      }
+    };
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') isPasswordRecovery.value = true;
@@ -310,6 +360,16 @@ export default defineComponent({
                   <button type="submit" class="btn btn-success w-100 mt-2" disabled={isProcessing.value}>
                     {isProcessing.value ? 'Please wait...' : isSignup.value ? 'Create Account' : 'Sign In'}
                   </button>
+                  {!isSignup.value && !isForgotPassword.value && (
+                    <button
+                      type="button"
+                      class="btn btn-outline-success w-100"
+                      onClick={handleFaceIDLogin}
+                      disabled={isProcessing.value}
+                    >
+                      {isProcessing.value ? 'Verifying...' : 'Login with Face ID'}
+                    </button>
+                  )}
                 </form>
               )}
               <div class="text-center mt-3">
@@ -344,7 +404,16 @@ export default defineComponent({
                   <h4 class="h5 fw-bold mb-1">Welcome, {currentUser.value.name}</h4>
                   <p class="text-muted small mb-0">ID: <strong>{currentUser.value.username}</strong> | Dept: <strong>{currentUser.value.department}</strong></p>
                 </div>
-                <button onClick={logoutUser} class="btn btn-outline-danger btn-sm align-self-start align-self-sm-center">Log Out</button>
+                <div class="d-flex flex-wrap gap-2">
+                  <button
+                    onClick={handleSetupFaceID}
+                    class="btn btn-outline-success btn-sm"
+                    disabled={isProcessing.value}
+                  >
+                    {isProcessing.value ? 'Processing...' : 'Set Up Face ID'}
+                  </button>
+                  <button onClick={logoutUser} class="btn btn-outline-danger btn-sm">Log Out</button>
+                </div>
               </div>
             </div>
 
