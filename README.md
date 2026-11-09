@@ -1,5 +1,9 @@
 # Audu Bako Attendance
 
+## Staff password recovery
+
+Staff email recovery uses Supabase Auth. Apply `supabase/migrations/20261109202000_add_staff_email_auth.sql`, enable email signup and email confirmations in Supabase Auth, and allow the deployed app URL with `?view=staff&flow=recovery` in the Auth redirect URL list. Configure SMTP for reliable delivery. New staff register with an email; existing staff can add and verify an email after signing in with their current password. Password reset links return to the staff portal.
+
 ## Face ID / WebAuthn setup
 
 The admin portal uses the `webauthn` Supabase Edge Function to verify registration and sign-in assertions. Before using Face ID:

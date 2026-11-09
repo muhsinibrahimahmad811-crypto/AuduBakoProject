@@ -127,15 +127,204 @@ export function useAttendance() {
     return true;
   };
 
+  const registerStaff = async (userData) => {
+    const { data: existingUser, error: lookupError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('username', userData.username)
+      .maybeSingle();
+
+    if (lookupError) {
+      alert(`Could not check Staff ID: ${lookupError.message}`);
+      return false;
+    }
+    if (existingUser) {
+      alert('An account with this Staff ID / Username already exists.');
+      return false;
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: userData.email,
+      password: userData.password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/?view=staff`,
+        data: { username: userData.username }
+      }
+    });
+
+    if (authError || !authData.user || authData.user.identities?.length === 0) {
+      alert(`Registration failed: ${authError?.message || 'Could not create the account.'}`);
+      return false;
+    }
+
+    const newUser = {
+      id: Date.now().toString(),
+      auth_user_id: authData.user.id,
+      email: userData.email,
+      email_verified: Boolean(authData.user.email_confirmed_at),
+      name: userData.name,
+      username: userData.username,
+      password: null,
+      department: userData.department,
+      role: 'staff',
+      is_admin: false,
+      active: true
+    };
+
+    const { error: profileError } = await supabase.from('users').insert([newUser]);
+    if (profileError) {
+      alert(`Account was created, but the staff profile could not be saved: ${profileError.message}`);
+      return false;
+    }
+
+    if (authData.session) {
+      setCurrentUser({ ...newUser, isAdmin: false });
+    } else {
+      alert('Registration successful. Check your email to verify the account before signing in.');
+    }
+    return true;
+  };
+
+  const enrollStaffRecoveryEmail = async (email, password) => {
+    if (!currentUser.value || currentUser.value.isAdmin) return false;
+
+    const { data: legacyUser, error: validationError } = await supabase
+      .from('users')
+      .select('id, auth_user_id')
+      .eq('id', currentUser.value.id)
+      .eq('password', password)
+      .maybeSingle();
+
+    if (validationError || !legacyUser || legacyUser.auth_user_id) {
+      alert(`Could not verify the current account: ${validationError?.message || 'Re-enter the current password and try again.'}`);
+      return false;
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/?view=staff`,
+        data: { username: currentUser.value.username }
+      }
+    });
+
+    if (authError || !authData.user || authData.user.identities?.length === 0) {
+      alert(`Could not set up email recovery: ${authError?.message || 'That email may already be in use.'}`);
+      return false;
+    }
+
+    const updates = {
+      email,
+      auth_user_id: authData.user.id,
+      email_verified: Boolean(authData.user.email_confirmed_at),
+      ...(authData.user.email_confirmed_at ? { password: null } : {})
+    };
+    const { error: updateError } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', currentUser.value.id);
+
+    if (updateError) {
+      alert(`Email account created, but staff profile update failed: ${updateError.message}`);
+      return false;
+    }
+
+    setCurrentUser({ ...currentUser.value, ...updates });
+    if (!authData.session) {
+      alert('Check your email and verify the address to enable password recovery.');
+    } else {
+      alert('Email recovery is ready for your account.');
+    }
+    return true;
+  };
+
+  const resendStaffRecoveryEmail = async () => {
+    const email = currentUser.value?.email;
+    if (!email || currentUser.value.email_verified) return false;
+
+    const { error } = await supabase.auth.resend({ type: 'signup', email });
+    if (error) {
+      alert(`Could not resend the verification email: ${error.message}`);
+      return false;
+    }
+    alert('A new verification email has been sent.');
+    return true;
+  };
+
+  const markStaffEmailVerified = async (authUserId) => {
+    const { error } = await supabase
+      .from('users')
+      .update({ email_verified: true, password: null })
+      .eq('auth_user_id', authUserId);
+    if (error) {
+      console.error('Failed to update verified staff email:', error);
+      alert(`Email verified, but the staff profile could not be updated: ${error.message}`);
+      return false;
+    }
+
+    if (currentUser.value?.auth_user_id === authUserId) {
+      setCurrentUser({ ...currentUser.value, email_verified: true, password: null });
+    }
+    return true;
+  };
+
+  const requestStaffPasswordReset = async (email) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/?view=staff&flow=recovery`
+    });
+    if (error) {
+      alert(`Could not send the password reset email: ${error.message}`);
+      return false;
+    }
+    return true;
+  };
+
+  const updateStaffPassword = async (password) => {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      alert('Your password reset session has expired. Request a new reset email.');
+      return false;
+    }
+
+    const { error: passwordError } = await supabase.auth.updateUser({ password });
+    if (passwordError) {
+      alert(`Could not update password: ${passwordError.message}`);
+      return false;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('users')
+      .update({ password: null })
+      .eq('auth_user_id', authData.user.id)
+      .select('id')
+      .maybeSingle();
+    if (profileError || !profile) {
+      alert(`Password changed, but the linked staff profile could not be updated: ${profileError?.message || 'No profile was found.'}`);
+      return false;
+    }
+
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) {
+      alert(`Password changed, but sign-out failed: ${signOutError.message}`);
+      return false;
+    }
+    setCurrentUser(null);
+    return true;
+  };
+
   const loginUser = async (username, password, requiredRole = 'staff') => {
     const { data: user, error } = await supabase
       .from('users')
       .select('*')
       .eq('username', username)
-      .eq('password', password)
-      .single();
+      .maybeSingle();
 
-    if (error || !user) {
+    if (error) {
+      alert(`Could not load account: ${error.message}`);
+      return false;
+    }
+    if (!user) {
       alert('Invalid Staff ID/Username or Password.');
       return false;
     }
@@ -150,9 +339,52 @@ export function useAttendance() {
       return false;
     }
 
+    let authenticatedUser = user;
+    if (user.auth_user_id && user.email) {
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password
+      });
+
+      if (!authError && authData.user?.id && authData.user.id !== user.auth_user_id) {
+        alert('This email is not linked to the requested staff account.');
+        return false;
+      }
+
+      if (!authError && authData.user?.id === user.auth_user_id) {
+        if (user.password !== null || !user.email_verified) {
+          const { error: cleanupError } = await supabase
+            .from('users')
+            .update({ password: null, email_verified: true })
+            .eq('id', user.id);
+          if (cleanupError) {
+            alert(`Signed in, but the legacy password could not be cleared: ${cleanupError.message}`);
+          } else {
+            authenticatedUser = { ...user, password: null, email_verified: true };
+          }
+        }
+      } else if (
+        authError?.code === 'email_not_confirmed' &&
+        !user.email_verified &&
+        user.password === password
+      ) {
+        authenticatedUser = user;
+        alert('Verify the recovery email sent to your inbox before using email sign-in.');
+      } else if (authError?.code === 'email_not_confirmed') {
+        alert('Verify your email address before signing in.');
+        return false;
+      } else {
+        alert('Invalid Staff ID/Username or Password.');
+        return false;
+      }
+    } else if (user.password !== password) {
+      alert('Invalid Staff ID/Username or Password.');
+      return false;
+    }
+
     const sessionUser = {
-      ...user,
-      isAdmin: user.is_admin
+      ...authenticatedUser,
+      isAdmin: authenticatedUser.is_admin
     };
 
     setCurrentUser(sessionUser);
@@ -422,6 +654,12 @@ export function useAttendance() {
     activeDepartmentScope,
     fetchAllData,
     registerUser,
+    registerStaff,
+    enrollStaffRecoveryEmail,
+    resendStaffRecoveryEmail,
+    markStaffEmailVerified,
+    requestStaffPasswordReset,
+    updateStaffPassword,
     loginUser,
     completeBiometricLogin,
     logoutUser,

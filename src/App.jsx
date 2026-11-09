@@ -7,7 +7,8 @@ import AdminPortal from './components/AdminPortal';
 export default defineComponent({
   name: 'App',
   setup() {
-    const view = ref('home'); // 'home', 'staff', 'guest', or 'admin'
+    const initialView = new URLSearchParams(window.location.search).get('view');
+    const view = ref(initialView === 'staff' ? 'staff' : 'home');
 
     return () => (
       <div class="min-vh-100 bg-light font-sans text-dark">
